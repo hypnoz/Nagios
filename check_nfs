@@ -1,0 +1,84 @@
+#!/bin/sh
+# --
+# Check if all specified nfs mounts exist and if they are correct implemented.
+# That means we check /etc/fstab, the mountpoints in the filesystem and if they
+# are mounted. 
+# --
+
+
+# --------------------------------------------------------------------
+# configuration
+# --------------------------------------------------------------------
+PROGNAME=$(basename $0)
+#ERR_MESG=""
+MTAB=/proc/mounts
+export PATH="/bin:/sbin:/usr/bin:/usr/sbin"
+LIBEXEC="/usr/lib/nagios/plugins"
+. $LIBEXEC/utils.sh
+
+
+# --------------------------------------------------------------------
+# functions
+# --------------------------------------------------------------------
+
+usage() {
+    echo "Check if nfs mount points are correctly implemented and mounted."
+    echo ""
+    echo "Usage: $PROGNAME --fstab"
+    echo "Usage: $PROGNAME [-m FILE] \$NFSmountpoint [\$NFSmountpoint2 ...]"
+    echo "Usage: $PROGNAME -h, --help"
+    echo "Options:"
+    echo " -m FILE   Use this mtab instead (default is /proc/mounts)"
+}
+
+check_mounts() {
+IFS="
+"
+    FSTAB_MOUNTS=$(grep -v "#" /etc/fstab | awk '{if ($3=="nfs"){print $1, $2}}')
+    for MP in $FSTAB_MOUNTS; do
+        grep -q ${MP} /proc/mounts || 
+            ( echo "CRITICAL: ${MP} isn't mounted"; exit $STATE_CRITICAL )
+        MPshort=$(echo ${MP} | awk '{print $2}')
+        df ${MPshort} | grep -q "Stale NFS file handle" && 
+            ( echo "CRITICAL: ${MP} is Stale NFS mount"; exit $STATE_CRITICAL )
+    done
+
+    NFS_MOUNTS=`awk '{if ($3=="nfs" && $2!="/auto/home"){print $1, $2, $3}}' /proc/mounts | grep -v automount`
+    for MP in $NFS_MOUNTS; do
+        MP1=`echo ${MP} | awk '{print $1}'`
+        MP2=`echo ${MP} | awk '{print $2}'`
+        MP3=`echo ${MP} | awk '{print $3}'`
+        grep -v "^#" /etc/fstab | grep -qE "${MP1}.+${MP2}.+${MP3}" || 
+            ( echo "CRITICAL: ${MP} not in fstab"; exit $STATE_CRITICAL )
+    done
+}
+
+# --------------------------------------------------------------------
+# startup checks
+# --------------------------------------------------------------------
+
+if [ $# -eq 0 ]; then
+    usage
+    exit $STATE_UNKNOWN
+fi
+
+if [ ! -f ${MTAB} ]; then
+    echo "CRITICAL: ${MTAB} doesn't exist!"
+    exit $STATE_CRITICAL
+fi
+
+while [ "$1" != "" ]
+do
+    case "$1" in
+        --help) usage; exit $STATE_OK;;
+        -h) usage; exit $STATE_OK;;
+        --fstab) check_mounts; shift;;
+        -m) MTAB=$2; shift 2;;
+        /*) MPS="${MPS} $1"; shift;;
+        *) usage; exit $STATE_UNKNOWN;;
+    esac
+done
+
+
+echo "OK: all mounts were found"
+exit $STATE_OK
